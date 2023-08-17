@@ -1,0 +1,825 @@
+---
+title: "- Exploratory Data Analysis -"
+site: workflowr::wflow_site
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+<style>
+body{text-align: justify}
+pre code, pre, code {
+  white-space: pre !important;
+  overflow-x: scroll !important;
+  word-break: keep-all !important;
+  word-wrap: initial !important;
+}
+</style>
+
+*File creation: August, 07th 2023*  
+*Update: August, 09th 2023*  
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(Seurat)
+library(MAST)
+library(doMC)
+library(cowplot)
+library(data.table)
+```
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+load(here("output", "003_output", "003_EDA.RData"))
+# save.image(here("output", "003_output", "003_EDA.RData"))
+```
+  
+# Exploratory Data Analysis - CD8+ T
+____________________________________
+
+Two ADTs (CD4 and CD8) are used to determine CD4+ and CD8+ T cells using the `SCAMP` R package. Once CD8+ T cells are extracted, we re-run the WNN workflow - see code below.  
+This workflow consists of three steps: 1) independent preprocessing and dimensional reduction of each modality individually; 2) learning cell-specific modality *weights*, and constructing a WNN graph that integrates the modalities; and 3) downstream analysis (i.e. visualization, clustering, etc.) of the WNN graph. The `FindMultiModalNeighbors` R function is run with `dims.list = list(1:50, 1:25)` and `modality.weight.name = c("RNA.weight", "ADT.weight")`. Before re-running the WNN workflow, PCA (ADT & GEX) are also re-run in order to avoid having potential PCs driven by other factors (AgSpecNot or cell types).  
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- CD8+ T - AgSpec - GEX
+#- Subset
+integrated.seurat <- readRDS(file = here("data", "001_integrated-seurat_GEX.rds"))
+integrated.seurat <- subset(integrated.seurat, sort_population == "AgSpec")
+integrated.seurat <- subset(integrated.seurat, T_phenotype == "CD8+")
+DefaultAssay(integrated.seurat)
+
+#- Data Integration done (w/ AgSpec & AgSpecNot; w/ CD4+ T, CD8+ T & DURTs)
+
+#- Normalization
+integrated.seurat <- NormalizeData(object = integrated.seurat, assay = "RNA", normalization.method = "LogNormalize", verbose = TRUE)
+integrated.seurat <- NormalizeData(object = integrated.seurat, assay = "ADT", normalization.method = "CLR", verbose = TRUE)
+
+#- PCA
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRAJ"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRBJ"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRGJ"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRDJ"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRAD"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRBD"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRGD"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRDD"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRAV"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRBV"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRGV"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRDV"))]
+integrated.seurat <- RunPCA(object = integrated.seurat, npcs = 100, verbose = TRUE)
+ElbowPlot(integrated.seurat, ndims = 100)
+chosen.nPCs <- 50
+
+#- UMAP
+integrated.seurat <- RunUMAP(object = integrated.seurat, dims = 1:chosen.nPCs, verbose = TRUE, seed.use = 1234, min.dist = .01)
+
+#- Output
+saveRDS(object = integrated.seurat, file = here("data", "003_integrated-seurat_GEX.rds"))
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- CD8+ T - AgSpec - ADT
+#- Subset
+integrated.seurat <- readRDS(file = here("data", "001_integrated-seurat_ADT.rds"))
+integrated.seurat <- subset(integrated.seurat, sort_population == "AgSpec")
+integrated.seurat <- subset(integrated.seurat, T_phenotype == "CD8+")
+DefaultAssay(integrated.seurat)
+
+#- Data Integration done (w/ AgSpec & AgSpecNot; w/ CD4+ T, CD8+ T & DURTs)
+
+#- Normalization
+integrated.seurat <- NormalizeData(object = integrated.seurat, assay = "RNA", normalization.method = "LogNormalize", verbose = TRUE)
+integrated.seurat <- NormalizeData(object = integrated.seurat, assay = "ADT", normalization.method = "CLR", verbose = TRUE)
+
+#- Scaling & PCA
+integrated.seurat <- ScaleData(object = integrated.seurat, vars.to.regress = "nCount_ADT",verbose = TRUE)
+integrated.seurat <- RunPCA(object = integrated.seurat, npcs = 100, verbose = TRUE)
+ElbowPlot(integrated.seurat, ndims = 100)
+chosen.nPCs <- 25
+
+#- UMAP
+integrated.seurat <- RunUMAP(object = integrated.seurat, dims = 1:chosen.nPCs, verbose = TRUE, seed.use = 1234, min.dist = .01)
+
+#- Output
+saveRDS(object = integrated.seurat, file = here("data", "003_integrated-seurat_ADT.rds"))
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- CD8+ T - AgSpec - WNN
+#- Data
+integrated.seurat_GEX <- readRDS(file = here("data", "003_integrated-seurat_GEX.rds"))
+#ElbowPlot(integrated.seurat_GEX, ndims = 100) # 50 PCs
+integrated.seurat_ADT <- readRDS(file = here("data", "003_integrated-seurat_ADT.rds"))
+#ElbowPlot(integrated.seurat_ADT, ndims = 100) # 25 PCs
+
+#- Add PCA results to one Seurat object
+integrated.seurat_GEX[["pca_ADT"]] <- CreateDimReducObject(embeddings = Embeddings(object = integrated.seurat_ADT, reduction = "pca"), assay = "integrated")
+
+#- Run WNN
+integrated.seurat_WNN <- FindMultiModalNeighbors(object = integrated.seurat_GEX,
+                                                 reduction.list = list("pca", "pca_ADT"),
+                                                 dims.list = list(1:50, 1:25),
+                                                 modality.weight.name = c("RNA.weight", "ADT.weight"),
+                                                 prune.SNN = 1/20)
+
+#- UMAP
+integrated.seurat_WNN <- RunUMAP(object = integrated.seurat_WNN, nn.name = "weighted.nn", reduction.name = "wnn.umap", reduction.key = "wnnUMAP_", seed.use = 1234, min.dist = .1, n.neighbors = 15, verbose = TRUE)
+
+#- Clustering
+set.seed(1234)
+resolutions <- c(seq(from = .1, to = 1, by = .1), seq(from = 1.2, to = 2, by = .2))
+for(i in resolutions) {
+  integrated.seurat_WNN <- FindClusters(object = integrated.seurat_WNN, graph.name = "wsnn", algorithm = 3, resolution = i, n.start = 10, verbose = TRUE)
+}
+
+#- Output
+saveRDS(object = integrated.seurat_WNN, file = here("data", "003_integrated-seurat_WNN.rds"))
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Processing - GEX + ADT = WNN
+#- Open .rds
+integrated.seurat_GEX <- readRDS(file = here("data", "003_integrated-seurat_GEX.rds"))
+integrated.seurat_ADT <- readRDS(file = here("data", "003_integrated-seurat_ADT.rds"))
+integrated.seurat_WNN <- readRDS(file = here("data", "003_integrated-seurat_WNN.rds"))
+identical(colnames(integrated.seurat_WNN), colnames(integrated.seurat_GEX))
+identical(colnames(integrated.seurat_WNN), colnames(integrated.seurat_ADT))
+
+#- DietSeurat
+DefaultAssay(integrated.seurat_WNN) <- "RNA"
+reducedSize_integrated.seurat <- DietSeurat(object = integrated.seurat_WNN, 
+                                            counts = TRUE, 
+                                            data = TRUE, 
+                                            assays = c("RNA", "ADT"), 
+                                            dimreducs = NULL)
+
+#- Add UMAPs
+reducedSize_integrated.seurat[["umap_GEX"]] <- CreateDimReducObject(embeddings = Embeddings(object = integrated.seurat_GEX, reduction = "umap"), assay = "RNA")
+reducedSize_integrated.seurat[["umap_ADT"]] <- CreateDimReducObject(embeddings = Embeddings(object = integrated.seurat_ADT, reduction = "umap"), assay = "ADT")
+reducedSize_integrated.seurat[["umap_WNN"]] <- CreateDimReducObject(embeddings = Embeddings(object = integrated.seurat_WNN, reduction = "wnn.umap"), assay = "RNA")
+
+#- Add meta.data
+colnames(reducedSize_integrated.seurat@meta.data)
+reducedSize_integrated.seurat@meta.data <- reducedSize_integrated.seurat@meta.data[, c(1:3, 31, 4:17, 33:34, 20, 27, 35:36, 37, 39:52)]
+
+#- Output
+saveRDS(object = reducedSize_integrated.seurat, file = here("data", "003_integrated-seurat.rds"))
+```
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+###--- Open .rds
+integrated.seurat <- readRDS(file = here("data", "003_integrated-seurat.rds"))
+# saveRDS(object = integrated.seurat, file = here("data", "003_integrated-seurat.rds"))
+```
+
+## UMAP - Technical factors
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, fig.width=12, fig.height=10}
+###--- UMAP
+data.table(Embeddings(object = integrated.seurat, "umap_WNN"),
+           integrated.seurat@meta.data) %>%
+  ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+    geom_point(aes(color = nCount_RNA), size = .01) +
+    scale_color_viridis_c(option = "C") +
+    labs(x = "UMAP-1", y = "UMAP-2", color = "# UMIs\nGEX") +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 14)) -> plotA
+data.table(Embeddings(object = integrated.seurat, "umap_WNN"),
+           integrated.seurat@meta.data) %>%
+  ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+    geom_point(aes(color = nFeature_RNA), size = .01) +
+    scale_color_viridis_c(option = "C") +
+    labs(x = "UMAP-1", y = "UMAP-2", color = "# genes") +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 14)) -> plotB
+data.table(Embeddings(object = integrated.seurat, "umap_WNN"),
+           integrated.seurat@meta.data) %>%
+  ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+    geom_point(aes(color = percent.mt), size = .01) +
+    scale_color_viridis_c(option = "C") +
+    labs(x = "UMAP-1", y = "UMAP-2", color = "% mito") +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 14)) -> plotC
+data.table(Embeddings(object = integrated.seurat, "umap_WNN"),
+           integrated.seurat@meta.data) %>%
+  ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+    geom_point(aes(color = nCount_ADT), size = .01) +
+    scale_color_viridis_c(option = "C") +
+    labs(x = "UMAP-1", y = "UMAP-2", color = "# UMIs\nADT") +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 14)) -> plotD
+cowplot::plot_grid(plotA, plotB, plotC, plotD, labels = "AUTO", align = c("hv"), ncol = 2)  
+```
+
+## UMAP - Batch  
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, fig.width=6, fig.height=7}
+###--- UMAP
+data.table(Embeddings(object = integrated.seurat, "umap_WNN"),
+           integrated.seurat@meta.data) %>%
+  ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+    geom_point(aes(color = batch), size = .01) +
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    guides(colour = guide_legend(override.aes = list(size = 4))) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 8),
+          legend.position = "bottom")
+```
+```{r echo=FALSE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+data.ggplot <- data.table(Embeddings(object = integrated.seurat, "umap_WNN"), integrated.seurat@meta.data)
+for(j in data.ggplot$batch %>% unique()){
+  data.ggplot %>%
+    ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+      geom_point(color = "grey80", size = .01) +
+      ggpointdensity::geom_pointdensity(aes(x = wnnUMAP_1, y = wnnUMAP_2), data = subset(data.ggplot, batch == j), size = .01) +
+      viridis::scale_color_viridis() +
+      labs(x = "UMAP-1", y = "UMAP-2", color = NULL, title = paste("Summary: Batch", j)) +
+      theme_bw() +
+      theme(axis.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.title = element_text(size = 14),
+            panel.grid = element_blank(),
+            legend.text = element_text(size = 6),
+            legend.position = "none") -> plot
+  png(here::here("output", "003_output", paste0("WNN_UMAP-by-batch_", j, ".png")), width = 500, height = 550, res = 120)
+  print(plot)
+  dev.off()
+}
+```
+
+## UMAP - PTID
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, fig.width=6, fig.height=7}
+###--- UMAP
+data.table(Embeddings(object = integrated.seurat, "umap_WNN"),
+           integrated.seurat@meta.data) %>%
+  ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+    geom_point(aes(color = ptid %>% as.character), size = .01) +
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    guides(colour = guide_legend(override.aes = list(size = 4))) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 6),
+          legend.position = "bottom")
+```
+```{r echo=FALSE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+data.ggplot <- data.table(Embeddings(object = integrated.seurat, "umap_WNN"), integrated.seurat@meta.data) 
+for(j in data.ggplot$ptid %>% as.character() %>% unique()){
+  data.ggplot %>%
+    ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+      geom_point(color = "grey80", size = .01) +
+      ggpointdensity::geom_pointdensity(aes(x = wnnUMAP_1, y = wnnUMAP_2), data = subset(data.ggplot, ptid == j), size = .01) +
+      viridis::scale_color_viridis() +
+      labs(x = "UMAP-1", y = "UMAP-2", color = NULL, title = paste("Summary: PTID", j)) +
+      theme_bw() +
+      theme(axis.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.title = element_text(size = 14),
+            panel.grid = element_blank(),
+            legend.text = element_text(size = 6),
+            legend.position = "none") -> plot
+  png(here::here("output", "003_output", paste0("WNN_UMAP-by-ptid_", j, ".png")), width = 500, height = 550, res = 120)
+  print(plot)
+  dev.off()
+}
+```
+
+## UMAP - Arm
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, fig.width=6, fig.height=4}
+###--- UMAP
+data.table(Embeddings(object = integrated.seurat, "umap_WNN"),
+           integrated.seurat@meta.data) %>%
+  ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+    geom_point(aes(color = arm), size = .01) +
+    scale_color_brewer(palette = "Dark2") +
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    facet_wrap(~ arm, ncol = 2) +
+    guides(colour = guide_legend(override.aes = list(size = 4))) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 12),
+          legend.position = "bottom")
+```
+```{r echo=FALSE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+data.ggplot <- data.table(Embeddings(object = integrated.seurat, "umap_WNN"), integrated.seurat@meta.data) 
+for(j in data.ggplot$arm %>% unique()){
+  data.ggplot %>%
+    ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+      geom_point(color = "grey80", size = .01) +
+      ggpointdensity::geom_pointdensity(aes(x = wnnUMAP_1, y = wnnUMAP_2), data = subset(data.ggplot, arm == j), size = .01) +
+      viridis::scale_color_viridis() +
+      labs(x = "UMAP-1", y = "UMAP-2", color = NULL, title = paste("Summary: Arm", j)) +
+      theme_bw() +
+      theme(axis.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.title = element_text(size = 14),
+            panel.grid = element_blank(),
+            legend.text = element_text(size = 6),
+            legend.position = "none") -> plot
+  png(here::here("output", "003_output", paste0("WNN_UMAP-by-arm_", j, ".png")), width = 500, height = 550, res = 120)
+  print(plot)
+  dev.off()
+}
+```
+
+## UMAP - Stimulation
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, fig.width=6, fig.height=4}
+###--- UMAP
+data.table(Embeddings(object = integrated.seurat, "umap_WNN"),
+           integrated.seurat@meta.data) %>%
+  ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+    geom_point(aes(color = stim), size = .01) +
+    scale_color_brewer(palette = "Set3", direction = -1) +
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    facet_wrap(~ stim, ncol = 2) +
+    guides(colour = guide_legend(override.aes = list(size = 4))) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 12),
+          legend.position = "bottom")
+```
+```{r echo=FALSE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+data.ggplot <- data.table(Embeddings(object = integrated.seurat, "umap_WNN"), integrated.seurat@meta.data) 
+for(j in data.ggplot$stim %>% unique()){
+  data.ggplot %>%
+    ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+      geom_point(color = "grey80", size = .01) +
+      ggpointdensity::geom_pointdensity(aes(x = wnnUMAP_1, y = wnnUMAP_2), data = subset(data.ggplot, stim == j), size = .01) +
+      viridis::scale_color_viridis() +
+      labs(x = "UMAP-1", y = "UMAP-2", color = NULL, title = paste("Summary: Stimulation", j)) +
+      theme_bw() +
+      theme(axis.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.title = element_text(size = 14),
+            panel.grid = element_blank(),
+            legend.text = element_text(size = 6),
+            legend.position = "none") -> plot
+  png(here::here("output", "003_output", paste0("WNN_UMAP-by-stimulation_", j, ".png")), width = 500, height = 550, res = 120)
+  print(plot)
+  dev.off()
+}
+```
+
+## UMAP - Visit #
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, fig.width=6, fig.height=4}
+###--- UMAP
+data.table(Embeddings(object = integrated.seurat, "umap_WNN"),
+           integrated.seurat@meta.data) %>%
+  ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+    geom_point(aes(color = visit), size = .01) +
+    scale_color_brewer(palette = "Paired") +
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    facet_wrap(~ visit, ncol = 2) +
+    guides(colour = guide_legend(override.aes = list(size = 4))) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 12),
+          legend.position = "bottom")
+```
+```{r echo=FALSE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+data.ggplot <- data.table(Embeddings(object = integrated.seurat, "umap_WNN"), integrated.seurat@meta.data) 
+for(j in data.ggplot$visit %>% unique()){
+  data.ggplot %>%
+    ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+      geom_point(color = "grey80", size = .01) +
+      ggpointdensity::geom_pointdensity(aes(x = wnnUMAP_1, y = wnnUMAP_2), data = subset(data.ggplot, visit == j), size = .01) +
+      viridis::scale_color_viridis() +
+      labs(x = "UMAP-1", y = "UMAP-2", color = NULL, title = paste("Summary: Visit", j)) +
+      theme_bw() +
+      theme(axis.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.title = element_text(size = 14),
+            panel.grid = element_blank(),
+            legend.text = element_text(size = 6),
+            legend.position = "none") -> plot
+  png(here::here("output", "003_output", paste0("WNN_UMAP-by-visitno_", j, ".png")), width = 500, height = 550, res = 120)
+  print(plot)
+  dev.off()
+}
+```
+
+## UMAP - Markers
+
+**Markers - GEX**
+
+Not shown.  
+
+**Markers - ADT**
+
+Not shown.  
+
+```{r echo=FALSE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+data.ggplot <- data.table(Embeddings(object = integrated.seurat, "umap_WNN"),
+                          integrated.seurat@assays$ADT@data %>% as.matrix() %>% t() %>% as.matrix()) %>%
+  reshape2::melt(id.vars = c("wnnUMAP_1", "wnnUMAP_2")) 
+for(j in data.ggplot$variable %>% unique()){
+  data.ggplot %>%
+    filter(variable == j) %>%
+    mutate(value = ifelse(value > 3, 3, value)) %>%
+    ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+      geom_point(aes(color = value), size = .01) +
+      scale_color_gradient(low = "lightgrey", high = "darkgreen", breaks = c(0, 1, 2, 3), labels = c("0", "1", "2", ">3"), limits = c(0, 3)) +
+      labs(x = "UMAP-1", y = "UMAP-2", color = "ADT", title = paste("Summary: ADT", j)) +
+      theme_bw() +
+      theme(axis.text = element_blank(),
+            axis.ticks = element_blank(),
+            axis.title = element_text(size = 18),
+            strip.text = element_text(size = 18),
+            panel.grid = element_blank(),
+            legend.text = element_text(size = 12),
+            legend.position = "bottom") -> plot
+  png(here::here("output", "003_output", paste0("WNN_UMAP-by-ADT-marker_", j, ".png")), width = 500, height = 600, res = 120)
+  print(plot)
+  dev.off()
+}
+```
+
+## Clustering
+
+With a `resolution = 1`, we have 13 clusters    
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, fig.width=6, fig.height=6}
+###--- UMAP
+Idents(integrated.seurat) <- factor(x = integrated.seurat@meta.data$wsnn_res.1, levels = 0:12) 
+data.table(Embeddings(object = integrated.seurat, "umap_WNN"), wsnn_res.1 = Idents(integrated.seurat)) %>%
+  select(wnnUMAP_1, wnnUMAP_2, wsnn_res.1) %>%
+  reshape2::melt(id.vars = c("wnnUMAP_1", "wnnUMAP_2")) %>%
+  mutate(resolution = str_replace(string = variable, pattern = "wsnn_res.", replacement = "resolution ")) %>%
+  mutate(value = factor(x = value, levels = 0:12)) %>%
+  ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+    geom_point(aes(color = value), size = .01) +
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    facet_wrap(~ resolution, ncol = 5) +
+    guides(colour = guide_legend(override.aes = list(size = 4))) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 12),
+          legend.position = "none")
+```
+
+When aiming to identify markers of cell state independent of experimental condition, we include batch, donor, arm, stimulation and visit as covariates to the model. To identify gene markers, the `FindAllMarkers` R function is used with `test.use = MAST`, `latent.vars = c("nCount_RNA", "batch", "ptid", "arm", "stimulation", "visit")`.  
+To identify ADT markers, the `FindAllMarkers` R function is used with `test.use = LR`, `latent.vars = c("batch", "ptid", "arm", "stimulation", "visit")`. We merge clusters that do not exhibit clear evidence of separation.  
+
+```{r echo=FALSE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- UMAP
+data.table(Embeddings(object = integrated.seurat, "umap_WNN"),
+           integrated.seurat@meta.data) %>%
+  select(wnnUMAP_1, wnnUMAP_2, wsnn_res.1) %>%
+  mutate(wsnn_res.1 = factor(x = wsnn_res.1, levels = 0:12)) %>%
+  ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+    geom_point(aes(color = wsnn_res.1), size = .01) +
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    facet_wrap(~ wsnn_res.1, ncol = 5) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 12),
+          legend.position = "none")
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Cluster annotation - GEX & ADT
+#- Variables
+annotations <- read.table(here("misc-docs", "2020_gene-annotation.txt"), header = TRUE, sep = ",")
+Idents(integrated.seurat) <- factor(x = integrated.seurat@meta.data$wsnn_res.1, levels = 0:12) 
+Idents(integrated.seurat) %>% table()
+integrated.seurat@meta.data$batch %>% class()
+integrated.seurat@meta.data$ptid %>% class()
+integrated.seurat@meta.data$ptid <- integrated.seurat@meta.data$ptid %>% as.character()
+integrated.seurat@meta.data$arm %>% class()
+integrated.seurat@meta.data$stim %>% class()
+integrated.seurat@meta.data$visit %>% class()
+
+#- MAST (GEX)
+# Perform differential expression for each of the merged clusters
+DefaultAssay(integrated.seurat) <- "RNA"
+markers.clusters_GEX <- FindAllMarkers(object = integrated.seurat, 
+                                       only.pos = TRUE, 
+                                       test.use = "MAST", 
+                                       latent.vars = c("nCount_RNA", "batch", "ptid", "arm", "stim", "visit"),
+                                       verbose = TRUE)
+markers.clusters_GEX <- markers.clusters_GEX %>%
+  filter(p_val_adj < 1e-05) %>%
+  arrange(cluster, p_val_adj, avg_log2FC) %>%
+  left_join(y = unique(annotations[, c("gene_name", "description")]), by = c("gene" = "gene_name")) 
+markers.clusters_GEX %>%
+  write_csv(file = here("output", "003_output", "GEX_markers-clusters_v1.csv"))
+
+#- Top 20 (GEX)
+markers.clusters_GEX %>%
+  group_by(cluster) %>% 
+  top_n(n = 20, wt = avg_log2FC) %>%
+  View("Top genes")
+
+#- LR (ADT)
+# Perform differential expression for each of the merged clusters
+DefaultAssay(integrated.seurat) <- "ADT"
+markers.clusters_ADT <- FindAllMarkers(object = integrated.seurat, 
+                                       only.pos = TRUE, 
+                                       test.use = "LR", 
+                                       latent.vars = c("batch", "ptid", "arm", "stim", "visit"),
+                                       verbose = TRUE)
+markers.clusters_ADT <- markers.clusters_ADT %>%
+  filter(p_val_adj < 1e-05) %>%
+  arrange(cluster, p_val_adj, avg_log2FC)
+markers.clusters_ADT %>%
+  write_csv(file = here("output", "003_output", "ADT_markers-clusters_v1.csv"))
+
+#- Top 20 (ADT)
+markers.clusters_ADT %>%
+  group_by(cluster) %>% 
+  top_n(n = 20, wt = avg_log2FC) %>%
+  View("Top ADTs")
+
+#- Ridge plots
+pdf(file = here("output", "003_output", "ADT_ridgePlots_v1.pdf"), width = 5, height = 8, bg = "white", pointsize = 12)
+for(i in setdiff(rownames(integrated.seurat@assays$ADT@data), "CD4.2")){
+  data.table(integrated.seurat@meta.data, ADT = integrated.seurat@assays$ADT@data[i, ]) %>%
+    mutate(integrated.clusters = factor(x = wsnn_res.1, levels = 0:12) ) %>%
+    ggplot(aes(y = integrated.clusters, x = ADT, fill = integrated.clusters)) +
+      ggridges::geom_density_ridges(bandwidth = .2) +
+      geom_vline(xintercept = 0, color = "grey20", alpha = .7, lty = 2) +
+      labs(x = "Normalized ADT expression", title = paste(str_remove(string = i, pattern = "[.]1"), "(ADT)")) +
+      theme_bw() +
+      theme(axis.text = element_text(size = 12),
+            axis.title.x = element_text(size = 14, face = "plain"),
+            axis.title.y = element_blank(),
+            title = element_text(size = 16, face = "bold"),
+            panel.grid = element_blank(),
+            legend.text = element_text(size = 12),
+            legend.position = "none") -> plot
+  print(plot)
+}
+dev.off()
+
+#- Proposed annotation
+# 0 - MAIT
+# 1 - TEMRA (Terminally differentiated) CD8+ T
+# 2 - TEMRA (Terminally differentiated) CD8+ T
+# 3 - TEMRA (Terminally differentiated) CD8+ T
+# 4 - TEM (Effector memory) CD8+ T
+# 5 - TEMRA (Terminally differentiated) CD8+ T
+# 6 - TEMRA (Terminally differentiated) CD8+ T
+# 7 - Naive CD8+ T (1)
+# 8 - CD8+ gdT-like
+# 9 - CD103+CD8+ T
+# 10 - Naive CD8+ T (2)
+# 11 - NKT
+# 12 - MAIT
+
+#- Add results to meta.data
+integrated.seurat@meta.data$integrated.clusters <- integrated.seurat@meta.data$wsnn_res.1
+integrated.seurat@meta.data$integrated.annotation.clusters <- plyr::mapvalues(x = integrated.seurat@meta.data$integrated.clusters, 
+                                                                              from = 0:12, 
+                                                                              to = c("MAIT",
+                                                                                     "TEMRA (Terminally differentiated) CD8+ T", 
+                                                                                     "TEMRA (Terminally differentiated) CD8+ T", 
+                                                                                     "TEMRA (Terminally differentiated) CD8+ T", 
+                                                                                     "TEM (Effector memory) CD8+ T", 
+                                                                                     "TEMRA (Terminally differentiated) CD8+ T", 
+                                                                                     "TEMRA (Terminally differentiated) CD8+ T", 
+                                                                                     "Naive CD8+ T (1)", 
+                                                                                     "CD8+ gdT-like", 
+                                                                                     "CD103+CD8+ T", 
+                                                                                     "Naive CD8+ T (2)", 
+                                                                                     "NKT", 
+                                                                                     "MAIT")) %>% as.character
+integrated.seurat@meta.data$integrated.clusters <- plyr::mapvalues(x = integrated.seurat@meta.data$integrated.annotation.clusters,
+                                                                   from = c("Naive CD8+ T (1)",
+                                                                            "Naive CD8+ T (2)",
+                                                                            "TEM (Effector memory) CD8+ T", 
+                                                                            "TEMRA (Terminally differentiated) CD8+ T", 
+                                                                            "CD103+CD8+ T",
+                                                                            "MAIT",
+                                                                            "CD8+ gdT-like", 
+                                                                            "NKT"),
+                                                                   to = paste("Seurat", 1:8))
+integrated.seurat@meta.data$integrated.clusters <- factor(x = integrated.seurat@meta.data$integrated.clusters, 
+                                                          levels = paste("Seurat", 1:8))
+```
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Cluster annotation - GEX & ADT - version 2 (merged clusters)
+Idents(integrated.seurat) <- integrated.seurat@meta.data$integrated.clusters
+Idents(integrated.seurat) %>% table()
+
+#- MAST (GEX)
+# Perform differential expression for each of the merged clusters
+DefaultAssay(integrated.seurat) <- "RNA"
+markers.clusters_GEX_2 <- FindAllMarkers(object = integrated.seurat, 
+                                         only.pos = TRUE, 
+                                         test.use = "MAST", 
+                                         latent.vars = c("nCount_RNA", "batch", "ptid", "arm", "stim", "visit"),
+                                         verbose = TRUE)
+markers.clusters_GEX_2 <- markers.clusters_GEX_2 %>%
+  filter(p_val_adj < 1e-05) %>%
+  arrange(cluster, p_val_adj, avg_log2FC) %>%
+  left_join(y = unique(annotations[, c("gene_name", "description")]), by = c("gene" = "gene_name")) %>%
+  filter(!str_detect(string = gene, pattern = "RP")) %>%
+  mutate(`Annotation - Valentin` = plyr::mapvalues(x = cluster, 
+                                                   to = c("Naive CD8+ T (1)",
+                                                          "Naive CD8+ T (2)",
+                                                          "TEM (Effector memory) CD8+ T", 
+                                                          "TEMRA (Terminally differentiated) CD8+ T", 
+                                                          "CD103+CD8+ T",
+                                                          "MAIT",
+                                                          "CD8+ gdT-like", 
+                                                          "NKT"), 
+                                                   from = paste("Seurat", 1:8))) 
+markers.clusters_GEX_2 %>%
+  write_csv(file = here("output", "003_output", "GEX_markers-clusters_v2.csv"))
+
+#- Top 20 (GEX)
+markers.clusters_GEX_2 %>%
+  group_by(cluster) %>% 
+  filter(!str_detect(string = gene, pattern = "RP")) %>%
+  top_n(n = 20, wt = avg_log2FC) %>%
+  View("Top genes")
+
+#- LR (ADT)
+# Perform differential expression for each of the merged clusters
+DefaultAssay(integrated.seurat) <- "ADT"
+markers.clusters_ADT_2 <- FindAllMarkers(object = integrated.seurat, 
+                                         only.pos = TRUE, 
+                                         test.use = "LR", 
+                                         latent.vars = c("batch", "ptid", "arm", "stim", "visit"),
+                                         verbose = TRUE)
+markers.clusters_ADT_2 <- markers.clusters_ADT_2 %>%
+  filter(p_val_adj < 1e-05) %>%
+  arrange(cluster, p_val_adj, avg_log2FC) %>%
+  mutate(`Annotation - Valentin` = plyr::mapvalues(x = cluster, 
+                                                   to = c("Naive CD8+ T (1)",
+                                                          "Naive CD8+ T (2)",
+                                                          "TEM (Effector memory) CD8+ T", 
+                                                          "TEMRA (Terminally differentiated) CD8+ T", 
+                                                          "CD103+CD8+ T",
+                                                          "MAIT",
+                                                          "CD8+ gdT-like", 
+                                                          "NKT"), 
+                                                   from = paste("Seurat", 1:8))) 
+markers.clusters_ADT_2 %>%
+  write_csv(file = here("output", "003_output", "ADT_markers-clusters_v2.csv"))
+
+#- Top 20 (ADT)
+markers.clusters_ADT_2 %>%
+  group_by(cluster) %>% 
+  top_n(n = 20, wt = avg_log2FC) %>%
+  View("Top ADTs")
+```
+
+According to these markers and after merging clusters that do not exhibit clear evidence of separation, we have  
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, fig.width=10, fig.height=11}
+###--- UMAP
+#- Data
+dt.ggplot <- data.table(Embeddings(object = integrated.seurat, "umap_WNN"), integrated.seurat@meta.data)
+
+#- Annotation
+centers <- dt.ggplot %>% 
+  group_by(integrated.clusters, integrated.annotation.clusters) %>% 
+  summarize(UMAP_1 = median(wnnUMAP_1), UMAP_2 = median(wnnUMAP_2))
+centers$integrated.annotation.clusters <- c("Naïve CD8+ T cells",
+                                            "Naïve CD8+ T cells",
+                                            "TEM (Effector memory)\nCD8+ T cells",
+                                            "TEMRA (Terminally differentiated)\nCD8+ T cells",
+                                            "CD103+CD8+\nT cells",
+                                            "MAIT",
+                                            "CD8+ gdT-like",
+                                            "NKT cells")
+centers$UMAP_1[3] <- -4
+  
+#- Plot
+my.colors <- RColorBrewer::brewer.pal(n = 8, name = "Paired")
+names(my.colors) <- paste("Seurat", 1:8)
+dt.ggplot %>%  
+  filter(integrated.clusters %in% paste("Seurat", 1:8)) %>%
+  ggplot(aes(x = wnnUMAP_1, y = wnnUMAP_2)) +
+    geom_point(aes(color = integrated.clusters), size = .5, alpha = .8) +
+    labs(x = "UMAP-1", y = "UMAP-2", color = NULL) +
+    scale_color_manual(values = my.colors) +
+    geom_text(aes(x = UMAP_1, y = UMAP_2, label = integrated.annotation.clusters), size = 5, color = "black", data = centers, fontface = "bold") +
+    guides(colour = guide_legend(override.aes = list(size = 4, alpha = 1))) +
+    theme_bw() +
+    theme(axis.text = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_text(size = 14),
+          panel.grid = element_blank(),
+          legend.text = element_text(size = 12),
+          legend.position = "none") -> plot
+png(file = here("output", "003_output", "Figure_WNN-UMAP.png"), width = 10, height = 10, units = "in", pointsize = 12, res = 500)
+plot
+dev.off()
+```
+
+**Heatmap - GEX**
+
+Not shown.  
+
+```{r echo=FALSE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Heatmap
+#- Top 10
+DEGs <- markers.clusters_GEX_2 %>%
+  filter(cluster %in% paste("Seurat", 1:8)) %>%
+  group_by(cluster) %>% 
+  filter(!str_detect(string = gene, pattern = "RP")) %>%
+  top_n(n = 10, wt = avg_log2FC) %>%
+  pull(gene)
+
+#- Heatmap (downsample - Seurat)
+my.colors <- RColorBrewer::brewer.pal(n = 8, name = "Paired")
+names(my.colors) <- paste("Seurat", 1:8)
+
+DefaultAssay(integrated.seurat) <- "RNA"
+seurat.tmp <- subset(integrated.seurat, integrated.clusters %in% paste("Seurat", 1:8))
+Idents(seurat.tmp) <- factor(x = seurat.tmp@meta.data$integrated.clusters, levels = paste("Seurat", 1:8)) 
+seurat.tmp <- subset(seurat.tmp, downsample = 100)
+seurat.tmp <- ScaleData(object = seurat.tmp, features = DEGs, verbose = TRUE)
+
+png(filename = here("output", "003_output", "GEX_heatmap-top10_v2.png"), width = 1000, height = 1300, bg = "white")
+DoHeatmap(seurat.tmp, features = DEGs, group.colors = my.colors)
+dev.off()
+```
+
+**Ridge plots - ADT**
+
+Not shown.  
+
+```{r echo=FALSE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- RidgePlot - ADTs
+my.colors <- RColorBrewer::brewer.pal(n = 8, name = "Paired")
+names(my.colors) <- paste("Seurat", 1:8)
+
+pdf(file = here("output", "003_output", "ADT_ridgePlots_v2.pdf"), width = 5, height = 8, bg = "white", pointsize = 12)
+for(i in setdiff(rownames(integrated.seurat@assays$ADT@data), "CD4.2")){
+  data.table(integrated.seurat@meta.data, ADT = integrated.seurat@assays$ADT@data[i, ]) %>%
+    filter(integrated.clusters %in% paste("Seurat", 1:8)) %>%
+    mutate(integrated.clusters = factor(x = integrated.clusters, levels = paste("Seurat", 1:8))) %>%
+    ggplot(aes(y = integrated.clusters, x = ADT, fill = integrated.clusters)) +
+      ggridges::geom_density_ridges(bandwidth = .2) +
+      geom_vline(xintercept = 0, color = "grey20", alpha = .7, lty = 2) +
+      labs(x = "Normalized ADT expression", title = paste(str_remove(string = i, pattern = "[.]1"), "(ADT)")) +
+      scale_fill_manual(values = my.colors) +
+      theme_bw() +
+      theme(axis.text = element_text(size = 12),
+            axis.title.x = element_text(size = 14, face = "plain"),
+            axis.title.y = element_blank(),
+            title = element_text(size = 16, face = "bold"),
+            panel.grid = element_blank(),
+            legend.text = element_text(size = 12),
+            legend.position = "none") -> plot
+  print(plot)
+}
+dev.off()
+```
+
