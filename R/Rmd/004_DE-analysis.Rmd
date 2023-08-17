@@ -1,0 +1,193 @@
+---
+title: "- Differential Expression Analysis -"
+site: workflowr::wflow_site
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+<style>
+body{text-align: justify}
+pre code, pre, code {
+  white-space: pre !important;
+  overflow-x: scroll !important;
+  word-break: keep-all !important;
+  word-wrap: initial !important;
+}
+</style>
+
+*File creation: October, 22nd 2021*  
+*Update: April, 04th 2022*  
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(cowplot)
+library(data.table)
+library(doMC)
+library(MAST)
+library(Seurat)
+library(SingleCellExperiment)
+library(DESeq2)
+```
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+load(here("output", "004_output", "004_DE-analysis.RData"))
+# save.image(here("output", "004_output", "004_DE-analysis.RData"))
+```
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+###--- Open .rds
+integrated.seurat <- readRDS(file = here("data", "002_integrated-seurat.rds"))
+# saveRDS(object = integrated.seurat, file = here("data", "002_integrated-seurat.rds"))
+```
+
+# Differential Expression Analysis (V02 vs V10) - WCL Mtb or AG85B+TB10.4
+_________________________________________________________________________
+
+Our differential gene expression analysis is performed with the `MAST` R package (Finak et al., 2015). This package has specifically been developped for scRNA-seq data. It fits two-part, generalized linear models that are specially adapted for bimodal and/or zero-inflated single cell gene expression data. For each cluster, the model is the following: `~ CDR + batch + ptid + visit` with `v02` as baseline.  
+
+## BCG group
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- MAST (BCG)
+#- zlm fitting
+BCG.results_DEGs <- foreach(i = 1) %do%
+{
+  #- Subsetting
+  seurat.subset <- subset(integrated.seurat, integrated.clusters %in% paste("Seurat", 1:11)) # ADT-high are removed / CD4+ T bulk
+  seurat.subset <- subset(seurat.subset, arm == "BCG" & stim == "WCL Mtb")
+  
+  #- SingleCellAssay
+  sca.raw <- FromMatrix(exprsArray = seurat.subset@assays$RNA@data %>% as.matrix(), cData = seurat.subset@meta.data)
+  sca <- sca.raw[freq(sca.raw) > .1, ]
+  colData(sca)$sCDR <- scale(colData(sca)$nCount_RNA) 
+  
+  #- zlm fitting
+  colData(sca)$ptid <- colData(sca)$ptid %>% as.character()
+  colData(sca)$batch <- colData(sca)$batch %>% as.character()
+  colData(sca)$visit <- factor(colData(sca)$visit, levels = c("V02", "V10"))
+  zlm.res <- zlm(~ sCDR + batch + ptid + visit, sca, 
+                 method = "bayesglm", 
+                 ebayes = TRUE,
+                 ebayesControl = list(method = "MLE", model = "H1"),
+                 hook = NULL)
+  saveRDS(object = zlm.res, file = here("output", "004_output", "zlm_BCG-WCLMtb_V02-vs-V10_CD4+T.rds"))
+  
+  #- Results
+  summaryCond.tmp <- summary(zlm.res, doLRT = "visitV10") 
+  summaryDt.tmp <- summaryCond.tmp$datatable
+ 
+  #- Output
+  fcHurdle.tmp <- merge(summaryDt.tmp[contrast == "visitV10" & component == "H", .(primerid, `Pr(>Chisq)`)],
+                        summaryDt.tmp[contrast == "visitV10" & component == "logFC", .(primerid, coef, ci.hi, ci.lo)],
+                        by = "primerid")
+  fcHurdle.tmp[, FDR := p.adjust(p = `Pr(>Chisq)`, method = "fdr")]
+  return(fcHurdle.tmp)
+}
+BCG.results_DEGs <- bind_rows(BCG.results_DEGs)
+
+#- Significant results
+BCG.results_DEGs %>%
+  filter(FDR <= .01 & abs(coef) >= log2(1.5)) %>%
+  arrange(FDR)
+```
+
+**Tables - DEG**
+
+*FDR 5% & Fold-Change > log2(1.5)*  
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, results="asis"}
+###--- Table
+dt.output <- foreach(i = 1) %do%
+{
+  #- Output
+  dt.output <- BCG.results_DEGs %>%
+    arrange(FDR, -abs(coef))
+  write_csv(x = dt.output, file = here("output", "004_output", "DEGs_BCG-WCLMtb_V02-vs-V10_CD4+T.csv"))
+  
+  #- Table
+  dt.output <- dt.output %>% filter(FDR < .05 & abs(coef) >= log2(1.5))
+  dt <- data.table(gene = dt.output$primerid, 
+                  `Pr(>Chisq)` = round(dt.output$`Pr(>Chisq)`, 7),
+                  coef = round(dt.output$coef, 3), 
+                  FDR = round(dt.output$FDR, 7))
+  return(dt)
+}
+DT::datatable(dt.output[[1]], caption = "DEGs - CD4+ T - v02 vs v10", options = list(pageLength = 5))
+```
+
+## H4:IC31 group
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- MAST (H4:IC31)
+#- zlm fitting
+H4.results_DEGs <- foreach(i = 1) %do%
+{
+  #- Subsetting
+  seurat.subset <- subset(integrated.seurat, integrated.clusters %in% paste("Seurat", 1:11)) # ADT-high are removed / CD4+ T bulk
+  seurat.subset <- subset(seurat.subset, arm == "H4" & stim == "AG85B+TB10.4")
+  
+  #- SingleCellAssay
+  sca.raw <- FromMatrix(exprsArray = seurat.subset@assays$RNA@data %>% as.matrix(), cData = seurat.subset@meta.data)
+  sca <- sca.raw[freq(sca.raw) > .1, ]
+  colData(sca)$sCDR <- scale(colData(sca)$nCount_RNA) 
+  
+  #- zlm fitting
+  colData(sca)$ptid <- colData(sca)$ptid %>% as.character()
+  colData(sca)$batch <- colData(sca)$batch %>% as.character()
+  colData(sca)$visit <- factor(colData(sca)$visit, levels = c("V02", "V10"))
+  zlm.res <- zlm(~ sCDR + batch + ptid + visit, sca, 
+                 method = "bayesglm", 
+                 ebayes = TRUE,
+                 ebayesControl = list(method = "MLE", model = "H1"),
+                 hook = NULL)
+  saveRDS(object = zlm.res, file = here("output", "004_output", "zlm_H4-AG85BTB10.4_V02-vs-V10_CD4+T.rds"))
+  
+  #- Results
+  summaryCond.tmp <- summary(zlm.res, doLRT = "visitV10") 
+  summaryDt.tmp <- summaryCond.tmp$datatable
+ 
+  #- Output
+  fcHurdle.tmp <- merge(summaryDt.tmp[contrast == "visitV10" & component == "H", .(primerid, `Pr(>Chisq)`)],
+                        summaryDt.tmp[contrast == "visitV10" & component == "logFC", .(primerid, coef, ci.hi, ci.lo)],
+                        by = "primerid")
+  fcHurdle.tmp[, FDR := p.adjust(p = `Pr(>Chisq)`, method = "fdr")]
+  return(fcHurdle.tmp)
+}
+H4.results_DEGs <- bind_rows(H4.results_DEGs)
+
+#- Significant results
+H4.results_DEGs %>%
+  filter(FDR <= .01 & abs(coef) >= log2(1.3)) %>%
+  arrange(FDR)
+```
+
+**Tables - DEG**
+
+*FDR 5% & Fold-Change > log2(1.5)*  
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE, results="asis"}
+###--- Table
+dt.output <- foreach(i = 1) %do%
+{
+  #- Output
+  dt.output <- H4.results_DEGs %>%
+    arrange(FDR, -abs(coef))
+  write_csv(x = dt.output, file = here("output", "004_output", "DEGs_H4-AG85BTB10.4_V02-vs-V10_CD4+T.csv"))
+  
+  #- Table
+  dt.output <- dt.output %>% filter(FDR < .05 & abs(coef) >= log2(1.5))
+  dt <- data.table(gene = dt.output$primerid, 
+                  `Pr(>Chisq)` = round(dt.output$`Pr(>Chisq)`, 7),
+                  coef = round(dt.output$coef, 3), 
+                  FDR = round(dt.output$FDR, 7))
+  return(dt)
+}
+DT::datatable(dt.output[[1]], caption = "DEGs - CD4+ T - v02 vs v10", options = list(pageLength = 5))
+```
+
