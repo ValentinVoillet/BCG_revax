@@ -266,3 +266,105 @@ for(i in resolutions) {
 #- Output
 saveRDS(object = integrated.seurat_WNN, file = here("data", "002_integrated-seurat_WNN.rds"))
 
+
+
+################################
+################################
+###---  Data Integration (GEX) - AgSpec & AgSpecNot - CD8+ T
+#- Data (subset)
+# integrated.seurat <- readRDS(file = here("data", "001_integrated-seurat_GEX.rds"))
+integrated.seurat <- subset(integrated.seurat, sort_population == "AgSpec")
+integrated.seurat <- subset(integrated.seurat, T_phenotype == "CD8+")
+DefaultAssay(integrated.seurat)
+
+#- Data Integration
+# Done - including all T cells (see code above)
+
+#- Normalization
+integrated.seurat <- NormalizeData(object = integrated.seurat, assay = "RNA", normalization.method = "LogNormalize", verbose = TRUE)
+integrated.seurat <- NormalizeData(object = integrated.seurat, assay = "ADT", normalization.method = "CLR", verbose = TRUE)
+
+#- PCA
+# TCR-genes are removed
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRAJ"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRBJ"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRGJ"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRDJ"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRAD"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRBD"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRGD"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRDD"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRAV"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRBV"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRGV"))]
+VariableFeatures(integrated.seurat) <- VariableFeatures(integrated.seurat)[which(!str_detect(string = VariableFeatures(integrated.seurat), pattern = "^TRDV"))]
+integrated.seurat <- RunPCA(object = integrated.seurat, npcs = 100, verbose = TRUE)
+chosen.nPCs <- 50
+
+#- UMAP
+integrated.seurat <- RunUMAP(object = integrated.seurat, dims = 1:chosen.nPCs, verbose = TRUE, seed.use = 1234, min.dist = .01)
+
+#- Output
+# saveRDS(object = integrated.seurat, file = here("data", "003_integrated-seurat_GEX.rds"))
+
+
+
+################################
+################################
+###---  Data Integration (ADT) - AgSpec & AgSpecNot - CD8+ T
+#- Data (subset)
+# integrated.seurat <- readRDS(file = here("data", "001_integrated-seurat_ADT.rds"))
+integrated.seurat <- subset(integrated.seurat, sort_population == "AgSpec")
+integrated.seurat <- subset(integrated.seurat, T_phenotype == "CD8+")
+DefaultAssay(integrated.seurat)
+
+#- Data Integration
+# Done - including all T cells (see code above)
+
+#- Normalization
+integrated.seurat <- NormalizeData(object = integrated.seurat, assay = "RNA", normalization.method = "LogNormalize", verbose = TRUE)
+integrated.seurat <- NormalizeData(object = integrated.seurat, assay = "ADT", normalization.method = "CLR", verbose = TRUE)
+
+#- Scaling & PCA
+integrated.seurat <- ScaleData(object = integrated.seurat, vars.to.regress = "nCount_ADT",verbose = TRUE)
+integrated.seurat <- RunPCA(object = integrated.seurat, npcs = 100, verbose = TRUE)
+chosen.nPCs <- 25
+
+#- UMAP
+integrated.seurat <- RunUMAP(object = integrated.seurat, dims = 1:chosen.nPCs, verbose = TRUE, seed.use = 1234, min.dist = .01)
+
+#- Output
+# saveRDS(object = integrated.seurat, file = here("data", "003_integrated-seurat_ADT.rds"))
+
+
+
+################################
+################################
+###--- Data Integration - WNN - AgSpec & AgSpecNot - CD8+ T
+#- Data
+# integrated.seurat_GEX <- readRDS(file = here("data", "003_integrated-seurat_GEX.rds"))
+# integrated.seurat_ADT <- readRDS(file = here("data", "003_integrated-seurat_ADT.rds"))
+
+#- Add PCA results to one Seurat object
+integrated.seurat_GEX[["pca_ADT"]] <- CreateDimReducObject(embeddings = Embeddings(object = integrated.seurat_ADT, reduction = "pca"), assay = "integrated")
+
+#- Run WNN
+integrated.seurat_WNN <- FindMultiModalNeighbors(object = integrated.seurat_GEX,
+                                                 reduction.list = list("pca", "pca_ADT"),
+                                                 dims.list = list(1:50, 1:25),
+                                                 modality.weight.name = c("RNA.weight", "ADT.weight"),
+                                                 prune.SNN = 1/20)
+
+#- UMAP
+integrated.seurat_WNN <- RunUMAP(object = integrated.seurat_WNN, nn.name = "weighted.nn", reduction.name = "wnn.umap", reduction.key = "wnnUMAP_", seed.use = 1234, min.dist = .1, n.neighbors = 15, verbose = TRUE)
+
+#- Clustering
+set.seed(1234)
+resolutions <- c(seq(from = .1, to = 1, by = .1), seq(from = 1.2, to = 2, by = .2))
+for(i in resolutions) {
+  integrated.seurat_WNN <- FindClusters(object = integrated.seurat_WNN, graph.name = "wsnn", algorithm = 3, resolution = i, n.start = 10, verbose = TRUE)
+}
+
+#- Output
+saveRDS(object = integrated.seurat_WNN, file = here("data", "003_integrated-seurat_WNN.rds"))
+
