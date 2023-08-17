@@ -1,0 +1,249 @@
+---
+title: "- Quality Control -"
+site: workflowr::wflow_site
+output:
+  workflowr::wflow_html:
+    toc: true
+    toc_float: true
+    number_sections: true
+    df_print: paged
+    code_folding: hide
+editor_options: 
+  chunk_output_type: console
+---
+
+<style>
+body{text-align: justify}
+pre code, pre, code {
+  white-space: pre !important;
+  overflow-x: scroll !important;
+  word-break: keep-all !important;
+  word-wrap: initial !important;
+}
+</style>
+
+*File creation: February, 24th 2021*  
+*Update: March, 17th 2021*  
+
+```{r echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(scater)
+library(Seurat)
+library(doMC)
+library(cowplot)
+library(data.table)
+```
+
+
+# Quality Control
+_________________
+
+As described in Luecken and Theis (2019), _"before analysing the single-cell gene expression data, we must ensure that all cellular barcode data correspond to viable cells. Cell quality control (QC) is commonly performed based on three QC covariates: the number of counts per barcode (count depth), the number of genes per barcode, and the fraction of counts from mitochondrial genes per barcode (Ilicic et al, 2016; Griffiths et al, 2018)"_.  
+It is important to consider these covariates jointly instead of separately (Luecken, 2019). A key assumption here is that the QC metrics are independent of the biological state of each cell. Poor values (e.g., low library sizes, high mitochondrial proportions) are presumed to be driven by technical factors rather than biological processes, meaning that the subsequent removal of cells will not misrepresent the biology in downstream analyses. Also, if the distribution of QC covariates differ between samples, QC thresholds should be determined separately for each sample to account for sample quality differences as in Plasschaert et al (2018).  
+
+It is important to note that demultiplexing (with hastag oligos (HTOs)) and global QC have been done by FHCRC. Here, another quality control step is done for **each batch/pool combination**.  
+
+## Gene Expression (GEX)
+
+Here, we use a relaxed QC strategy and only remove cells with large mitochondrial proportions, using it as a proxy for cell damage. This reduces the risk of removing cell types with low RNA content, especially in a heterogeneous population with many different cell types (see Orchestrating Single-cell Analysis).  
+We choose to use a relatively merciful cutoffs (5 Median Absolute Deviation (MADs)) to exclude poor-quality cells while avoiding bias against some subpopulations (as explained in Germain et al (2020)).  
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Quality Control - GEX
+# ml R/4.0.2-foss-2019b
+seurat.files <- list.files(path = here("data"), pattern = "raw-", full.names = TRUE)
+seurat.files
+
+#pdf(file = here("output", "000_output", "Figure_QCmetrics_GEX.pdf"), width = 12, height = 7)
+seuratObj.list <- foreach(i = seurat.files) %do%
+{
+  #- Open .rds
+  cat("\nProcessing", i)
+  seuratObj.tmp <- readRDS(file = i)
+  
+  #- Get outliers (using mitochondrial genes)
+  seuratObj.tmp@meta.data$mito_discard <- isOutlier(metric = seuratObj.tmp@meta.data$percent.mt, nmads = 5)
+  
+  #- Plots
+  seuratObj.tmp@meta.data %>%
+    arrange(mito_discard) %>%
+    ggplot(aes(x = 1, y = nCount_RNA)) +
+      geom_jitter(aes(color = mito_discard), size = .7) +
+      geom_violin(alpha = .7) +
+      labs(x = NULL, y = "# UMIs\n(GEX)") +
+      scale_color_brewer(palette = "Dark2") +
+      guides(colour = guide_legend(override.aes = list(size = 4))) +
+      theme_bw() +
+      theme(axis.text.x = element_blank(),
+            axis.ticks.x = element_blank(),
+            axis.text.y = element_text(size = 12),
+            axis.title.y = element_text(size = 14),
+            panel.grid = element_blank(),
+            legend.position = "bottom",
+            legend.text = element_text(size = 12),
+            legend.title = element_text(size = 14)) -> plotA
+  seuratObj.tmp@meta.data %>%
+    arrange(mito_discard) %>%
+    ggplot(aes(x = 1, y = nFeature_RNA)) +
+      geom_jitter(aes(color = mito_discard), size = .7) +
+      geom_violin(alpha = .7) +
+      labs(x = NULL, y = "# genes on") +
+      scale_color_brewer(palette = "Dark2") +
+      guides(colour = guide_legend(override.aes = list(size = 4))) +
+      theme_bw() +
+      theme(axis.text.x = element_blank(),
+            axis.ticks.x = element_blank(),
+            axis.text.y = element_text(size = 12),
+            axis.title.y = element_text(size = 14),
+            panel.grid = element_blank(),
+            legend.position = "bottom",
+            legend.text = element_text(size = 12),
+            legend.title = element_text(size = 14)) -> plotB
+  seuratObj.tmp@meta.data %>%
+    arrange(mito_discard) %>%
+    ggplot(aes(x = 1, y = percent.mt)) +
+      geom_jitter(aes(color = mito_discard), size = .7) +
+      geom_violin(alpha = .7) +
+      labs(x = NULL, y = "% mitochondrial genes") +
+      scale_color_brewer(palette = "Dark2") +
+      guides(colour = guide_legend(override.aes = list(size = 4))) +
+      theme_bw() +
+      theme(axis.text.x = element_blank(),
+            axis.ticks.x = element_blank(),
+            axis.text.y = element_text(size = 12),
+            axis.title.y = element_text(size = 14),
+            panel.grid = element_blank(),
+            legend.position = "bottom",
+            legend.text = element_text(size = 12),
+            legend.title = element_text(size = 14)) -> plotC
+  plot_row <- plot_grid(plotA, plotB, plotC, ncol = 3, align = c("h", "v"), labels = "AUTO")
+  title <- ggdraw() + 
+    draw_label(paste("Summary - GEX:", seuratObj.tmp@meta.data$orig.ident %>% unique()), fontface = 'bold', x = 0, hjust = 0) +
+    theme(plot.margin = margin(0, 0, 0, 7))
+  plot_grid(title, plot_row, ncol = 1, rel_heights = c(0.1, 1)) %>% print
+  
+  #- Output
+  seuratObj.tmp %>% return()
+}
+#dev.off()
+```
+
+## Antibody-Derived Tags (ADT)
+
+For most part, quality control depends on the endogenous transcripts to remove empty droplets and low-quality cells. If we want to combine transcript and ADT data, it is prudent to ensure that we only retain cells that actually have ADT counts. As described in the Orchestrating Single-cell Analysis, we remove cells that have unusually low numbers of detected ADTs, defined here as half of the median across all cells.  
+We also choose to remove cells with large ADT counts as it might be due of unspecific binding. As above, we choose to use a relatively merciful cutoffs (5 Median Absolute Deviation (MADs)) to exclude these cells.  
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Quality Control - ADT
+#pdf(file = here("output", "000_output", "Figure_QCmetrics_ADT.pdf"), width = 12, height = 7)
+seuratObj.list <- foreach(i = 1:length(seuratObj.list)) %do%
+{
+  #- Seurat object
+  cat("\nProcessing", i)
+  seuratObj.tmp <- seuratObj.list[[i]]
+  
+  #- Get outliers
+  seuratObj.tmp@meta.data$ab_discard <- isOutlier(metric = seuratObj.tmp@meta.data$nFeature_ADT, type = "lower", min_diff = 1, log = TRUE)
+  seuratObj.tmp@meta.data$ab_discard_2 <- isOutlier(metric = seuratObj.tmp@meta.data$nCount_ADT, nmads = 5)
+  
+  #- Plots
+  seuratObj.tmp@meta.data %>%
+    arrange(ab_discard_2) %>%
+    ggplot(aes(x = 1, y = nCount_ADT)) +
+      geom_jitter(aes(color = ab_discard_2), size = .7) +
+      geom_violin(alpha = .7) +
+      labs(x = NULL, y = "# UMIs\n(ADT)") +
+      scale_color_brewer(palette = "Dark2") +
+      guides(colour = guide_legend(override.aes = list(size = 4))) +
+      theme_bw() +
+      theme(axis.text.x = element_blank(),
+            axis.ticks.x = element_blank(),
+            axis.text.y = element_text(size = 12),
+            axis.title.y = element_text(size = 14),
+            panel.grid = element_blank(),
+            legend.position = "bottom",
+            legend.text = element_text(size = 12),
+            legend.title = element_text(size = 14)) -> plotA
+  seuratObj.tmp@meta.data %>%
+    arrange(ab_discard_2) %>%
+    ggplot(aes(x = 1, y = nFeature_ADT)) +
+      geom_jitter(aes(color = ab_discard_2), size = .7) +
+      geom_violin(alpha = .7) +
+      labs(x = NULL, y = "# ADTs on") +
+      scale_color_brewer(palette = "Dark2") +
+      guides(colour = guide_legend(override.aes = list(size = 4))) +
+      theme_bw() +
+      theme(axis.text.x = element_blank(),
+            axis.ticks.x = element_blank(),
+            axis.text.y = element_text(size = 12),
+            axis.title.y = element_text(size = 14),
+            panel.grid = element_blank(),
+            legend.position = "bottom",
+            legend.text = element_text(size = 12),
+            legend.title = element_text(size = 14)) -> plotB
+  plot_row <- plot_grid(plotA, plotB, NULL, ncol = 3, align = c("h", "v"), labels = c("A", "B", ""))
+  title <- ggdraw() + 
+    draw_label(paste("Summary - ADT:", seuratObj.tmp@meta.data$orig.ident %>% unique()), fontface = 'bold', x = 0, hjust = 0) +
+    theme(plot.margin = margin(0, 0, 0, 7))
+  plot_grid(title, plot_row, ncol = 1, rel_heights = c(0.1, 1)) %>% print
+  
+  #- Output
+  seuratObj.tmp %>% return()
+}
+#dev.off()
+```
+
+## Assessing Quality & Filtering  
+
+We can assess the quality of our datasets by looking at highly variable genes in each batch/pool combination; and by produce overview plots in order to compare QC metrics across batches, pools, etc.  
+Please see these plots in the `output/000_output` folder.   
+
+```{r echo=TRUE, eval=FALSE, message=FALSE, warning=FALSE}
+###--- Assessing Quality (Highly variable genes) & Filtering
+#pdf(file = here("output", "000_output", "Figure_highly-variable-features_GEX.pdf"), width = 9, height = 7)
+seuratObj.list <- foreach(i = 1:length(seuratObj.list)) %do%
+{
+  #- Seurat object
+  cat("\nProcessing", i)
+  seuratObj.tmp <- seuratObj.list[[i]]
+  
+  #- Remove outliers
+  seuratObj.tmp <- subset(x = seuratObj.tmp, mito_discard == FALSE & ab_discard == FALSE & ab_discard_2 == FALSE)
+  
+  #- Remove genes with no expression - after removing outliers
+  seuratObj.tmp@assays$RNA@counts <- seuratObj.tmp@assays$RNA@counts[which(rowSums(seuratObj.tmp@assays$RNA@counts %>% as.matrix()) > 0), ]
+  seuratObj.tmp@assays$RNA@data <- seuratObj.tmp@assays$RNA@data[which(rowSums(seuratObj.tmp@assays$RNA@data %>% as.matrix()) > 0), ]
+  
+  #- Normalization - GEX & ADT
+  seuratObj.tmp <- NormalizeData(object = seuratObj.tmp, verbose = FALSE, assay = "RNA", normalization.method = "LogNormalize")
+  seuratObj.tmp <- NormalizeData(object = seuratObj.tmp, verbose = FALSE, assay = "ADT", normalization.method = "CLR")
+  
+  #- Variable genes
+  seuratObj.tmp <- FindVariableFeatures(seuratObj.tmp, selection.method = "vst", nfeatures = 2000, verbose = FALSE)
+  plotA <- VariableFeaturePlot(object = seuratObj.tmp)
+  plotB <- LabelPoints(plot = plotA, points = head(VariableFeatures(object = seuratObj.tmp), 30), repel = TRUE, xnudge = 0, ynudge = 0)
+  title <- ggdraw() + 
+    draw_label(paste("Summary - Variable Genes:", seuratObj.tmp@meta.data$orig.ident %>% unique()), fontface = 'bold', x = 0, hjust = 0) +
+    theme(plot.margin = margin(0, 0, 0, 7))
+  plot_grid(title, plotB, ncol = 1, rel_heights = c(0.1, 1)) %>% print
+  
+  #- Output
+  seuratObj.tmp <- RenameCells(object = seuratObj.tmp, new.names = paste(rownames(seuratObj.tmp@meta.data), seuratObj.tmp@meta.data$orig.ident, sep = "_"))
+  seuratObj.tmp %>% return()
+}
+#dev.off()
+
+
+###--- Output
+for(i in 1:length(seuratObj.list)){
+  #- Seurat object
+  cat("\nProcessing", i)
+  seuratObj.tmp <- seuratObj.list[[i]]
+  
+  #- Output
+  name.tmp <- paste("processed-Seurat", str_remove(string = seurat.files[i], pattern = paste0(here("data", "raw-Seurat_"))), sep = "_")
+  saveRDS(object = seuratObj.tmp, file = here("data", name.tmp))
+}
+```
+
